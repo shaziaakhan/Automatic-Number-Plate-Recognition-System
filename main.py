@@ -1,100 +1,47 @@
-import numpy as np
 import cv2
-from PIL import Image
-import pytesseract as tess
+from matplotlib import pyplot as plt
+import numpy as np
+import imutils
+import easyocr
 
-def ratioCheck(area,width,height):
-    ratio = float(width) / float(height)
-    if ratio<1:
-        ration=1/ratio
-    if(area <1063.62 or area>73862.5) or (ration<3 or ratio>6):
-        return False
-    return True
+img=cv2.imread('D:\git\Automatic-Number-Plate-Recognition-System\sample images\Final.JPG')
+gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+plt.imshow(cv2.cvtColor(gray, cv2.COLOR_BGR2RGB))
 
-def isMaxWhite(plate):
-    avg=np.mean(plate)
-    if(avg>=115):
-        return True
-    else:
-        return False
-    
-def ratio_and_rotation(rect):
-    (x,y), (width,height), rect_angle=rect
-    if(width>height):
-        angle=-rect_angle
-    else:
-        angle =90+rect_angle
-    if angle>15:
-        return False
-    if height==0 or width==0:
-        return False
-    area=height*width
-    if not ratioCheck(area,width, height):
-        return False
-    else:
-        return True
-    
-def clean2_plate(plate):
-    gray_img =cv2.cvtColor(plate,cv2.COLOR_BGR2GRAY)
+bfilter = cv2.bilateralFilter(gray, 11, 17, 17) #Noise reduction
+edged = cv2.Canny(bfilter, 30, 200) #Edge detection
+plt.imshow(cv2.cvtColor(edged, cv2.COLOR_BGR2RGB))
 
-    _, thresh= cv2.threshold(gray_img,110,255, cv2.THRESH_BINARY)
+keypoints = cv2.findContours(edged.copy(), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+contours = imutils.grab_contours(keypoints)
+contours = sorted(contours, key=cv2.contourArea, reverse=True)[:10]
 
-    if cv2.waitKey(0) & 0xff == ord('q'):
-        pass
-    num_contours,hierarchy = cv2.findContours(thresh.copy(),cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-    
-    if num_contours:
-        contour_area = [cv2.contourArea(c) for c in num_contours]
-        max_cntr_index = np.argmax(contour_area)
-        max_cnt = num_contours[max_cntr_index]
-        max_cntArea = contour_area[max_cntr_index]
-        x,y,w,h = cv2.boundingRect(max_cnt)
+location = None
+for contour in contours:
+    approx = cv2.approxPolyDP(contour, 10, True)
+    if len(approx) == 4:
+        location = approx
+        break
 
-        if not ratioCheck(max_cntArea,w,h):
-            return plate,None
+mask = np.zeros(gray.shape, np.uint8)
+new_image = cv2.drawContours(mask, [location], 0,255, -1)
+new_image = cv2.bitwise_and(img, img, mask=mask)
 
-        final_img = thresh[y:y+h, x:x+w]
-        return final_img,[x,y,w,h]
+plt.imshow(cv2.cvtColor(new_image, cv2.COLOR_BGR2RGB))
+#cv2.imshow("New Image",new_image)
 
-    else:
-        return plate, None
-    
-img = cv2.imread("D:/git/Automatic-Number-Plate-Recognition-System/sample2.jpg")
-print("Number input image...",)
-cv2.imshow("input",img)
+(x,y) = np.where(mask==255)
+(x1, y1) = (np.min(x), np.min(y))
+(x2, y2) = (np.max(x), np.max(y))
+cropped_image = gray[x1:x2+1, y1:y2+1]
+plt.imshow(cv2.cvtColor(cropped_image, cv2.COLOR_BGR2RGB))
 
-if cv2.waitKey(0) & 0xff == ord('q'):
-    pass
-img2 = cv2.GaussianBlur(img, (3,3), 0)
-img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
+reader = easyocr.Reader(['en'])
+result = reader.readtext(cropped_image)
+print (result)
 
-img2 = cv2.Sobel(img2,cv2.CV_8U,1,0,ksize=3)    
-_,img2 = cv2.threshold(img2,0,255,cv2.THRESH_BINARY+cv2.THRESH_OTSU)
-
-element = cv2.getStructuringElement(shape=cv2.MORPH_RECT, ksize=(17, 3))
-morph_img_threshold = img2.copy()
-cv2.morphologyEx(src=img2, op=cv2.MORPH_CLOSE, kernel=element, dst=morph_img_threshold)
-num_contours, hierarchy= cv2.findContours(morph_img_threshold,mode=cv2.RETR_EXTERNAL,method=cv2.CHAIN_APPROX_NONE)
-cv2.drawContours(img2, num_contours, -1, (0,255,0), 1)
-
-for i,cnt in enumerate(num_contours):
-    min_rect = cv2.minAreaRect(cnt)
-
-    if ratio_and_rotation(min_rect):
-        x,y,w,h = cv2.boundingRect(cnt)
-        plate_img = img[y:y+h,x:x+w]
-        print("Number  identified number plate...")
-        cv2.imshow("num plate image",plate_img)
-        if cv2.waitKey(0) & 0xff == ord('q'):
-            pass
-
-        if(isMaxWhite(plate_img)):
-            clean_plate, rect = clean2_plate(plate_img)
-            if rect:
-                fg=0
-                x1,y1,w1,h1 = rect
-                x,y,w,h = x+x1,y+y1,w1,h1
-                # cv2.imwrite("clena.png",clean_plate)
-                plate_im = Image.fromarray(clean_plate)
-                text = tess.image_to_string(plate_im, lang='eng')
-                print("Number Detected Plate Text : ",text)
+text = result[0][-2]
+font = cv2.FONT_HERSHEY_SIMPLEX
+res = cv2.putText(img, text=text, org=(approx[0][0][0], approx[1][0][1]+60), fontFace=font, fontScale=1, color=(0,255,0), thickness=2, lineType=cv2.LINE_AA)
+res = cv2.rectangle(img, tuple(approx[0][0]), tuple(approx[2][0]), (0,255,0),3)
+plt.imshow(cv2.cvtColor(res, cv2.COLOR_BGR2RGB))
